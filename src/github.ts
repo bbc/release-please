@@ -47,8 +47,7 @@ import {
   FileNotFoundError as MissingFileError,
 } from '@google-automations/git-file-utils';
 import {Logger} from 'code-suggester/build/src/types';
-import {HttpsProxyAgent} from 'https-proxy-agent';
-import {HttpProxyAgent} from 'http-proxy-agent';
+import {ProxyAgent, fetch as undiciFetch} from 'undici';
 import {PullRequestOverflowHandler} from './util/pull-request-overflow-handler';
 
 // Extract some types from the `request` package.
@@ -67,11 +66,6 @@ export interface GitHubOptions {
   logger?: Logger;
 }
 
-interface ProxyOption {
-  host: string;
-  port: number;
-}
-
 interface GitHubCreateOptions {
   owner: string;
   repo: string;
@@ -81,7 +75,7 @@ interface GitHubCreateOptions {
   octokitAPIs?: OctokitAPIs;
   token?: string;
   logger?: Logger;
-  proxy?: ProxyOption;
+  proxy?: string;
 }
 
 type CommitFilter = (commit: Commit) => boolean;
@@ -218,17 +212,23 @@ export class GitHub {
     this.logger = options.logger ?? defaultLogger;
   }
 
-  static createDefaultAgent(baseUrl: string, defaultProxy?: ProxyOption) {
+  static createDefaultFetch(
+    defaultProxy?: string
+  ): typeof undiciFetch | undefined {
     if (!defaultProxy) {
       return undefined;
     }
 
-    const {host, port} = defaultProxy;
-    if (new URL(baseUrl).protocol.replace(':', '') === 'http') {
-      return new HttpProxyAgent(`http://${host}:${port}`);
-    } else {
-      return new HttpsProxyAgent(`https://${host}:${port}`);
-    }
+    return (url, opts) => {
+      return undiciFetch(url, {
+        ...opts,
+        dispatcher: new ProxyAgent({
+          uri: defaultProxy,
+          keepAliveTimeout: 10,
+          keepAliveMaxTimeout: 10,
+        }),
+      });
+    };
   }
 
   /**
@@ -254,7 +254,7 @@ export class GitHub {
         baseUrl: apiUrl,
         auth: options.token,
         request: {
-          agent: this.createDefaultAgent(apiUrl, options.proxy),
+          fetch: this.createDefaultFetch(options.proxy),
         },
       }),
       request: request.defaults({
@@ -267,7 +267,7 @@ export class GitHub {
       graphql: graphql.defaults({
         baseUrl: graphqlUrl,
         request: {
-          agent: this.createDefaultAgent(graphqlUrl, options.proxy),
+          fetch: this.createDefaultFetch(options.proxy),
         },
         headers: {
           'user-agent': `release-please/${releasePleaseVersion}`,
